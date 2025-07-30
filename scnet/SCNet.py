@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from collections import deque
-from .separation import SeparationNet
+from separation import SeparationNet
 import typing as tp
 import math
 

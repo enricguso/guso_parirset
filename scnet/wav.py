@@ -13,7 +13,7 @@ import torch as th
 import torchaudio as ta
 from torch.nn import functional as F
 
-from .utils import convert_audio_channels
+from utils import convert_audio_channels
 from accelerate import Accelerator
 
 accelerator = Accelerator()
