@@ -36,7 +36,7 @@ model:
   expand: 1
 
 epochs: 200
-batch_size: 6 #initally 4, changed to 8 to speed up training
+batch_size: 4 #initally 4, changed to 8 to speed up training
 optim:
   lr: 0.0005
   decay_rate: 0.98
