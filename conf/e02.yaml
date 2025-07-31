@@ -1,6 +1,6 @@
 
 data:
-  wav: /media/share/musdbmoises
+  wav: /home/ubuntu/Data/musdbmoises
   samplerate: 44100
   segment: 11
   shift: 1
