@@ -99,6 +99,7 @@ def main():
         with open(checkpoint_log, "r") as f:
             d = json.load(f)
         best_nsdr = d['best_nsdr']
+        best_epoch = d['best_epoch']
         oepoch = d['epoch'] + 1
         train_losses = d['train_losses']
         val_losses = d['val_losses']
@@ -120,6 +121,7 @@ def main():
         print("No checkpoint found, starting from scratch.")
         epoch_times = []
         best_nsdr = 0
+        best_epoch = 0
         oepoch = 0  # Start from the first epoch
         train_losses = []
         val_losses = []
@@ -212,7 +214,8 @@ def main():
             # save log
             d = {
                     'epoch': epoch,
-                    'best_nsdr': val_nsdrs[-1],
+                    'best_nsdr': best_nsdr,
+                    'best_epoch': best_epoch,
                     'val_nsdrs': val_nsdrs,
                     'train_losses': train_losses,
                     'val_losses': val_losses,
@@ -229,6 +232,7 @@ def main():
 
             if val_nsdrs[-1] > best_nsdr:
                 best_nsdr = val_nsdrs[-1]
+                best_epoch = epoch
                 torch.save(model.state_dict(), checkpoint_file)
                 torch.save(optimizer.state_dict(), optimizer_file)
                 print(f"Epoch: {epoch}. New best NSDR: {best_nsdr:.4f}. Saving at {checkpoint_file}.")
