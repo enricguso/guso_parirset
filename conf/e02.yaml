@@ -1,6 +1,6 @@
 
 data:
-  wav: /home/ubuntu/Data/musdbmoises
+  wav: /home/enric.guso@local.eurecat.org/diskA/musdbmoises
   samplerate: 44100
   segment: 11
   shift: 3
@@ -38,7 +38,7 @@ model:
 epochs: 200
 batch_size: 4 #initally 4, changed to 8 to speed up training
 optim:
-  lr: 0.0004 #change to 0.0005 when removing moisesDB
+  lr: 0.0005 
   decay_rate: 0.98
   decay_step: 10
   momentum: 0.9

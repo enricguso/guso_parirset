@@ -1,6 +1,6 @@
 
 data:
-  wav: /home/ubuntu/enric/musdb18hq
+  wav: /home/enric.guso@local.eurecat.org/diskA/musdb18hq
   samplerate: 44100
   segment: 11
   shift: 1
