@@ -364,7 +364,7 @@ if __name__ == "__main__":
 
     model = SCNet(**config.model)
     model.eval();
-    seperator = Seperator(model, os.path.join(model_path,'model2.th'))
+    seperator = Seperator(model, os.path.join(model_path,'model.th'))
     
     songs = os.listdir(test_set_path)
 
