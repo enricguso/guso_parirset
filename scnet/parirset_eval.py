@@ -349,7 +349,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # defaults
     parser.add_argument("--models_dir", type=str, default='/media/share/enric/scnet_models', help="main path to models checkpoints")
-    parser.add_argument("--data_dir", type=str, default='/media/share', help="main path to datasets")
+    parser.add_argument("--data_dir", type=str, default='/media/share/enric', help="main path to datasets")
     parser.add_argument("--train_set", type=str, default='musdbmoises/train', help="dataset used for training")
     parser.add_argument("--out_path", type=str, default='/media/share/enric/scnet_models/results', help="path to save result")
     # compulsory
