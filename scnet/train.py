@@ -2,7 +2,7 @@ import os
 import sys
 import torch
 from pathlib import Path
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset, DataLoader
 from wav import get_wav_datasets
 from SCNet import SCNet
 import argparse
@@ -15,6 +15,8 @@ from loss import spec_rmse_loss
 from ml_collections import ConfigDict
 import json
 from datetime import datetime
+import torchaudio
+import itertools
 
 def get_model(config):
 
@@ -22,6 +24,99 @@ def get_model(config):
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return model, total_params
 
+def power(signal):
+    return torch.mean(signal**2)
+    
+class ParirSetRIRS(Dataset,):
+    def __init__(self, main_path, mode, set, sample_rate=44100):
+        self.maxlen = 60000 #maximum IR lenght in samples
+        self.main_path = main_path
+        self.mode = mode
+
+        if mode == 'b1':
+            folders = ['b1_gp']
+        elif mode == 'd1':
+            folders = ['b1_gp', 'd1_original']
+        elif mode == 'd2':
+            folders = ['b1_gp', 'd1_original', 'd2_capsules']
+        elif mode == 'd3':
+            folders = ['b1_gp', 'd1_original', 'd2_capsules', 'd3_beamforming']
+        elif mode == 'd4':
+            folders = ['b1_gp', 'd1_original', 'd2_capsules', 'd3_beamforming', 'd4_permute']
+        elif mode == 'ob1':
+            folders = ['b1_gp']
+        elif mode == 'od1':
+            folders = ['d1_original']
+        elif mode == 'od2':
+            folders = ['d2_capsules']
+        elif mode == 'od3':
+            folders = ['d3_beamforming']
+        elif mode == 'od4':
+            folders = ['d4_permute']
+        elif mode == 'test':
+            folders = ['test']
+        else:
+            print('unspecified RIR dataset!')
+        
+        wav_files = []
+        for folder in folders:
+            files = os.listdir(os.path.join(main_path, folder))
+            for f in files:
+                if '.wav' in f:
+                    wav_files.append(os.path.join(os.path.join(main_path, folder), f))
+
+        wav_files.sort()
+        if set == 'train':
+            wav_files = wav_files[:int(0.8*len(wav_files))]
+        elif set == 'valid':
+            wav_files = wav_files[int(0.8*len(wav_files)):]  
+        else:
+            if mode != 'test':
+                print('unspecified dataset set!')   
+
+        self.wav_files = wav_files
+        self.sample_rate = sample_rate
+
+    def __len__(self):
+        return len(self.wav_files)
+
+    def __getitem__(self, idx):
+        path = self.wav_files[idx]
+        waveform, sr = torchaudio.load(path)
+        if self.sample_rate and sr != self.sample_rate:
+            print('resampling RIR.')
+            waveform = torchaudio.functional.resample(waveform, sr, self.sample_rate)
+            sr = self.sample_rate
+            
+        zeros_to_pad = self.maxlen - waveform.shape[1]
+        if zeros_to_pad > 0:
+            return torch.hstack((waveform, torch.zeros((2, zeros_to_pad))))
+        else:
+            return waveform[:, :self.maxlen]
+
+
+def conv_torch(srcs, rirs):
+    #RIRs are minibatch, channels, samples
+    #srcs are minibatch, source, channels, samples
+    batch_size = srcs.shape[0]
+    nsources = srcs.shape[1]
+    out = []
+    for i in range(batch_size):
+        out_src = []
+        for k in range(nsources):
+            left = torchaudio.functional.fftconvolve(
+                    srcs[i, k, 0, :],
+                    rirs[i, 0, :], 'same')
+            right = torchaudio.functional.fftconvolve(
+                srcs[i, k, 1, :],
+                rirs[i, 1, :], 'same')
+            mix = torch.stack([left, right])
+            mix *= torch.sqrt(power(srcs[i, k, :, :]) / power(mix)) #keep power the same as input audio    
+            out_src.append(mix)
+        out_src = torch.stack(out_src)
+        out.append(out_src)
+    out = torch.stack(out)
+    return out
 
 def main():
     print('Starting training script...')
@@ -29,6 +124,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--save_path", type=str, default='./result/', help="path to config file")
     parser.add_argument("--config_path", type=str, default='../conf/config.yaml', help="path to save checkpoint")
+    parser.add_argument("--rir_mode", type=str, default='b1', help="which parirset rirs we use")
+
     args = parser.parse_args()
 
     if not os.path.exists(args.save_path):
@@ -67,7 +164,18 @@ def main():
         valid_set, batch_size=1, shuffle=False,
         num_workers=config.misc.num_workers)
 
-    loaders = {"train": train_loader, "valid": valid_loader}
+
+    rirset_train = ParirSetRIRS(config.data.rirs, args.rir_mode, set='train')
+    rirset_valid = ParirSetRIRS(config.data.rirs, args.rir_mode, set='valid')
+
+    if rirset_train.sample_rate != config.data.samplerate:
+        print('RIR dataset sample rate does not match config sample rate!')
+
+    rirloader_train = DataLoader(rirset_train, batch_size=config.batch_size, shuffle=True, drop_last=True)
+    rirloader_valid = DataLoader(rirset_valid, batch_size=config.batch_size, shuffle=False, drop_last=True)
+
+
+    loaders = {"train": train_loader, "valid": valid_loader, "rir_train": rirloader_train, "rir_valid": rirloader_valid}
     scaler = GradScaler()
     stft_config = {
             'n_fft': config.model.nfft,
@@ -133,6 +241,7 @@ def main():
 
 
     for epoch in range(oepoch, config.epochs):
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting epoch...")
         epoch_times.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         train_loss = []
         val_loss = []
@@ -157,10 +266,13 @@ def main():
         memthld = config.batch_size * (config.data.segment - 1) * config.data.samplerate
 
         # For every batch:
-        for sources in tqdm.tqdm(loaders['train']):
+
+        for sources, rirs in tqdm.tqdm(zip(loaders['train'], itertools.cycle(loaders['rir_train']))):
             if torch.cuda.is_available():
                 sources = sources.cuda()
+                rirs = rirs.cuda()
             sources = augmentx(sources)
+            sources = conv_torch(sources, rirs)
             mix = sources.sum(dim=1)
 
             estimate = model(mix)
@@ -185,11 +297,13 @@ def main():
 
         with torch.no_grad():
             # For every utterance:
-            for sources in tqdm.tqdm(loaders['valid']):
+            for sources, rirs in tqdm.tqdm(zip(loaders['valid'], itertools.cycle(loaders['rir_valid']))):
                 if sources.shape[3] > memthld:
                     sources = sources[:, :, :, :memthld]
                 if torch.cuda.is_available():
                     sources = sources.cuda()
+                    rirs = rirs.cuda()
+                sources = conv_torch(sources, rirs)
                 mix = sources[:, 0]
                 sources = sources[:, 1:]
                 estimate = model(mix) 
@@ -211,6 +325,13 @@ def main():
             val_other_sdrs.append(sum(val_other_sdr) / len(val_other_sdr))
             val_vocals_sdrs.append(sum(val_vocals_sdr) / len(val_vocals_sdr))
             
+
+            if val_nsdrs[-1] > best_nsdr:
+                best_nsdr = val_nsdrs[-1]
+                best_epoch = epoch
+                torch.save(model.state_dict(), checkpoint_file)
+                torch.save(optimizer.state_dict(), optimizer_file)
+                print(f"Epoch: {epoch}. New best NSDR: {best_nsdr:.4f}. Saving at {checkpoint_file}.")
             # save log
             d = {
                     'epoch': epoch,
@@ -228,15 +349,8 @@ def main():
                     'config': cdict
                 }
             with open(checkpoint_log, "w") as f:
-                json.dump(d, f, indent=4)
-
-            if val_nsdrs[-1] > best_nsdr:
-                best_nsdr = val_nsdrs[-1]
-                best_epoch = epoch
-                torch.save(model.state_dict(), checkpoint_file)
-                torch.save(optimizer.state_dict(), optimizer_file)
-                print(f"Epoch: {epoch}. New best NSDR: {best_nsdr:.4f}. Saving at {checkpoint_file}.")
-            
+                json.dump(d, f, indent=4)        
+                    
 if __name__ == "__main__":
     main()
 
