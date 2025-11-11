@@ -118,9 +118,7 @@ def conv_torch(srcs, rirs):
     out = torch.stack(out)
     return out
 
-def augment_drr(rirs):
-    # augment direct-to-reverberant ratio by scaling RIRs
-    drrs_factors = torch.rand(rirs.shape[0])
+def augment_drr(rirs, drrs_factors):
     # store direct path indexes
     midx = torch.argmax(rirs, axis=2)
     l = []
@@ -294,7 +292,8 @@ def main():
                 sources = sources.cuda()
                 rirs = rirs.cuda()
             # only during training, augment DRR in RIRs (randomly reduce reverberation):
-            rirs = augment_drr(rirs)
+            drrs_factors = torch.rand(rirs.shape[0])
+            rirs = augment_drr(rirs, drrs_factors)
 
             sources = augmentx(sources)
             sources = conv_torch(sources, rirs)
@@ -328,6 +327,8 @@ def main():
                 if torch.cuda.is_available():
                     sources = sources.cuda()
                     rirs = rirs.cuda()
+                # only during val, scale DRRs in RIRs always in the same way:
+                rirs = augment_drr(rirs, torch.linspace(0,1, rirs.shape[0]))
                 sources = conv_torch(sources, rirs)
                 mix = sources[:, 0]
                 sources = sources[:, 1:]
