@@ -4,9 +4,11 @@ from requests_ratelimiter import LimiterSession
 import tqdm
 import freesound
 import os
+import time
 
-client_id = 
-client_secret = 
+client_id = 'put your client id here'
+client_secret = 'put your client secret here'
+
 
 # do the OAuth dance
 oauth = OAuth2Session(client_id)
@@ -28,12 +30,15 @@ client.set_token(oauth_token["access_token"], "oauth")
 client.session = LimiterSession(per_minute=59)
 
 
-words = ['crowd', 'applause', 'audience', 'cheering', 'chatter', 'protest']
+words = ['crowd', 'applause', 'audience', 'cheering', 'chatter', 'protest'] # the queries to search for
 
+# only download sounds with these licenses
 licenses = ['http://creativecommons.org/licenses/by/3.0/',
  'http://creativecommons.org/publicdomain/zero/1.0/',
  'https://creativecommons.org/licenses/by-nc/4.0/',
- 'https://creativecommons.org/licenses/by/4.0/']
+ 'https://creativecommons.org/licenses/by/4.0/',
+ 'http://creativecommons.org/licenses/by-nc/3.0/',
+ 'http://creativecommons.org/licenses/sampling+/1.0/']
 
 
 data = []
@@ -57,7 +62,7 @@ if os.path.exists('fsd_crowd_sounds.xlsx'):
     ids_list = df_existing['id'].tolist()
 
 for word in words: 
-
+    print(word)
     os.makedirs('downloads/'+word, exist_ok=True)
 
     try:
@@ -67,15 +72,18 @@ for word in words:
             fields="id,type,name,download,license,username,duration"
         )
     except:
-        print(f'Error searching for word {word}, skipping it.')
-        continue    
+        print('error paging')
+        time.sleep(60)
+        continue
+
+
 
     while results_pager.next is not None:
         for sound in tqdm.tqdm(results_pager):
-            if sound.duration < 480.0:
-                if sound.id not in ids_list:
-                    if sound.license in licenses:
-                        try:
+            try:
+                if sound.duration < 480.0:
+                    if sound.id not in ids_list:
+                        if sound.license in licenses:
                             filename = sound.name.replace(" ", "_").replace("/", "_")
                             if filename[-3:] not in ['wav', 'aif', 'iff', 'ogg', 'mp3', 'm4a', 'lac']:
                                 filename = filename + '.' + sound.type
@@ -98,13 +106,24 @@ for word in words:
                             print(f'Downloaded {i+1} sounds so far...')
                             i += 1
                             ids_list.append(sound.id)
-                        except:
-                            print('Error downloading sound with id '+str(sound.id))
+                        else:
+                            print(f'Sound id {sound.id} has license {sound.license}, skipping...')
+                    else:
+                        print(f'Sound id {sound.id} already downloaded, skipping...')
+                else:
+                    print(f'Sound id {sound.id} is too long ({sound.duration} seconds), skipping...')
+            except:
+                time.sleep(60)
+                print('error')
+                continue
         try:
             results_pager = results_pager.next_page()
         except:
-            print('Error advancing to next page, going to next word.')
-            break
+            print('error advancing page, sleeping 60 seconds...')
+            time.sleep(60)
+            print('error')
+            continue
+
 
     df = pd.DataFrame(data)
     df.to_excel('fsd_crowd_sounds.xlsx')#, index=False)
