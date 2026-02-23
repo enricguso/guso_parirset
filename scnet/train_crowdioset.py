@@ -95,6 +95,82 @@ class ParirSetRIRS(Dataset,):
             return waveform[:, :self.maxlen]
 
 
+class CrowdiosetAmb(Dataset,):
+    def __init__(self, main_path, duration, sample_rate=44100):
+        self.main_path = main_path
+        self.duration = duration
+
+        amb_files = os.listdir(os.path.join(os.path.join(main_path, 'ambience'), 'train'))
+        amb_files.sort()
+        amb_files = [s for s in amb_files if s.endswith('.wav')] 
+        self.amb_files = amb_files
+        self.sample_rate = sample_rate
+
+    def __len__(self):
+        return len(self.amb_files)
+
+    def __getitem__(self, idx):
+
+        path_amb = self.amb_files[idx]
+        amb, sr = torchaudio.load(os.path.join(os.path.join(os.path.join(self.main_path, 'ambience'), 'train'), path_amb))
+        if self.sample_rate and sr != self.sample_rate:
+            print('resampling RIR.')
+            amb = torchaudio.functional.resample(amb, sr, self.sample_rate)
+            sr = self.sample_rate
+        # check stereo ambience 
+        if len(amb) == 1:
+            amb = amb.repeat(2,1)
+        else:
+            amb = amb[:2]
+        # random time crop, repeating ambience if short
+        while self.duration - amb.shape[1] > 0:
+            amb = amb.repeat(1, 2)
+        # Generate a random starting point
+        start = torch.randint(0, amb.shape[1] - self.duration + 1, (1,)).item()
+        amb = amb[:, start : start + self.duration]
+        return amb
+
+
+class CrowdiosetEve(Dataset,):
+    def __init__(self, main_path, duration, split, sample_rate=44100):
+        self.main_path = main_path
+        self.duration = duration
+        self.split = split
+
+        eve_files = os.listdir(os.path.join(os.path.join(main_path, 'events'), 'train'))
+        eve_files.sort()
+        eve_files = [s for s in eve_files if s.endswith('.wav')]
+        
+        self.eve_files = eve_files
+
+        self.sample_rate = sample_rate
+
+    def __len__(self):
+        return len(self.eve_files)
+
+    def __getitem__(self, idx):
+        path_eve = self.eve_files[idx]
+        eve, sr2 = torchaudio.load(os.path.join(os.path.join(os.path.join(self.main_path, 'events'), 'train'), path_eve))
+        if self.sample_rate and sr2 != self.sample_rate:
+            print('resampling RIR.')
+            eve = torchaudio.functional.resample(eve, sr, self.sample_rate)
+            sr2 = self.sample_rate
+
+        # check stereo ambience 
+        if len(eve) == 1:
+            eve = eve.repeat(2,1)
+        else:
+            eve = eve[:2]
+
+        out_eve = torch.zeros((2, self.duration))
+        
+        if eve.shape[1] >= self.duration - 2:
+            eve = eve[:, :self.duration - 2]
+        eve_start = torch.randint(0, self.duration - eve.shape[1], (1,)).item()
+        out_eve[:, eve_start : eve_start + eve.shape[1]] = eve
+        return out_eve
+
+
 def conv_torch(srcs, rirs):
     #RIRs are minibatch, channels, samples
     #srcs are minibatch, source, channels, samples
@@ -187,15 +263,22 @@ def main():
 
     rirset_train = ParirSetRIRS(config.data.rirs, args.rir_mode, set='train')
     rirset_valid = ParirSetRIRS(config.data.rirs, args.rir_mode, set='valid')
+    rirloader_train = DataLoader(rirset_train, batch_size=config.batch_size, shuffle=True, drop_last=True)
+    rirloader_valid = DataLoader(rirset_valid, batch_size=config.batch_size, shuffle=False, drop_last=True)
+
+    crowdioset_train_amb = CrowdiosetAmb('/media/diskA/enric/crowdioset/', config.data.segment*config.data.samplerate, config.data.samplerate)
+    crowdloader_amb_train = DataLoader(crowdioset_train_amb, batch_size=config.batch_size, shuffle=True, drop_last=True)
+
+    crowdioset_train_eve = CrowdiosetEve('/media/diskA/enric/crowdioset/', config.data.segment*config.data.samplerate, config.data.samplerate)
+    crowdloader_eve_train = DataLoader(crowdioset_train_eve, batch_size=config.batch_size, shuffle=True, drop_last=True)
+
+
+    loaders = {"train": train_loader, "valid": valid_loader, "rir_train": rirloader_train, "rir_valid": rirloader_valid, 
+            "amb_train": crowdloader_amb_train, "eve_train": crowdloader_eve_train}
 
     if rirset_train.sample_rate != config.data.samplerate:
         print('RIR dataset sample rate does not match config sample rate!')
 
-    rirloader_train = DataLoader(rirset_train, batch_size=config.batch_size, shuffle=True, drop_last=True)
-    rirloader_valid = DataLoader(rirset_valid, batch_size=config.batch_size, shuffle=False, drop_last=True)
-
-
-    loaders = {"train": train_loader, "valid": valid_loader, "rir_train": rirloader_train, "rir_valid": rirloader_valid}
     scaler = GradScaler()
     stft_config = {
             'n_fft': config.model.nfft,
@@ -233,6 +316,7 @@ def main():
         val_losses = d['val_losses']
         val_nsdrs = d['val_nsdrs']
         val_drums_sdrs = d['val_drums_sdrs']
+        val_audience_sdrs = d['val_audience_sdrs']
         val_bass_sdrs = d['val_bass_sdrs']
         val_other_sdrs = d['val_other_sdrs']
         val_vocals_sdrs = d['val_vocals_sdrs']
@@ -257,7 +341,8 @@ def main():
         val_drums_sdrs = []
         val_bass_sdrs = []
         val_other_sdrs = []
-        val_vocals_sdrs = []    
+        val_vocals_sdrs = []  
+        val_audience_sdrs = []  
 
 
     for epoch in range(oepoch, config.epochs):
@@ -270,6 +355,7 @@ def main():
         val_bass_sdr = []
         val_other_sdr = []
         val_vocals_sdr = []
+        val_audience_sdr = []
 
         # Adjust LR
         for param_group in optimizer.param_groups:
@@ -286,17 +372,40 @@ def main():
         memthld = config.batch_size * (config.data.segment - 1) * config.data.samplerate
 
         # For every batch:
-
-        for sources, rirs in tqdm.tqdm(zip(loaders['train'], itertools.cycle(loaders['rir_train']))):
+        
+        for sources, rirs, ambs, eves in tqdm.tqdm(zip(loaders['train'], itertools.cycle(loaders['rir_train']), 
+                                   itertools.cycle(loaders['amb_train']), itertools.cycle(loaders['eve_train']))): 
+            
             if torch.cuda.is_available():
                 sources = sources.cuda()
                 rirs = rirs.cuda()
+                ambs = ambs.cuda()
+                eves = eves.cuda()
+
             # only during training, augment DRR in RIRs (randomly reduce reverberation):
             drrs_factors = torch.rand(rirs.shape[0])
             rirs = augment_drr(rirs, drrs_factors)
 
+
+            # generate the audiences mixtures on the fly
+            audience = torch.zeros_like(ambs)
+            for i in range(len(audience)):
+                if torch.rand(1) < config.data.p_sing:
+                    audience[i] += 3 * torch.rand(1).cuda() * sources[i, 4]
+                if torch.rand(1) < config.data.p_amb:
+                    audience[i] += 0.5 * torch.rand(1).cuda() * ambs[i]
+                if torch.rand(1) < config.data.p_eve:
+                    audience[i] += 0.5 * torch.rand(1).cuda() * eves[i]
+                # normalize if needed
+                if torch.max(torch.abs(audience[i])) > 1.:
+                    audience[i] = audience[i] / torch.max(torch.abs(audience[i]))
+            sources[:, 4] = audience
+
             sources = augmentx(sources)
-            sources = conv_torch(sources, rirs)
+
+
+            if config.data.reverberate:
+                sources = conv_torch(sources, rirs)
             mix = sources.sum(dim=1)
 
             estimate = model(mix)
@@ -318,20 +427,25 @@ def main():
 
         train_losses.append(sum(train_loss) / len(train_loss))
         model.eval()
-
+        
         with torch.no_grad():
             # For every utterance:
             for sources, rirs in tqdm.tqdm(zip(loaders['valid'], itertools.cycle(loaders['rir_valid']))):
                 if sources.shape[3] > memthld:
                     sources = sources[:, :, :, :memthld]
+          
                 if torch.cuda.is_available():
                     sources = sources.cuda()
                     rirs = rirs.cuda()
+
                 # only during val, scale DRRs in RIRs always in the same way:
                 rirs = augment_drr(rirs, torch.linspace(0,1, rirs.shape[0]))
-                sources = conv_torch(sources, rirs)
-                mix = sources[:, 0]
+
+                #mix = sources[:, 0] #we change this, now the mixture is not the one from musdb18 or moisesdb
                 sources = sources[:, 1:]
+                if config.data.reverberate:
+                    sources = conv_torch(sources, rirs)
+                mix = sources.sum(dim=1)
                 estimate = model(mix) 
                 loss = spec_rmse_loss(estimate, sources, stft_config)
                 
@@ -343,6 +457,7 @@ def main():
                 val_bass_sdr.append(nsdrs[1].item())
                 val_other_sdr.append(nsdrs[2].item())
                 val_vocals_sdr.append(nsdrs[3].item())
+                val_audience_sdr.append(nsdrs[4].item())
                 val_nsdr.append(nsdrs.mean().item())
             val_losses.append(sum(val_loss) / len(val_loss))
             val_nsdrs.append(sum(val_nsdr) / len(val_nsdr))
@@ -350,6 +465,7 @@ def main():
             val_bass_sdrs.append(sum(val_bass_sdr) / len(val_bass_sdr))
             val_other_sdrs.append(sum(val_other_sdr) / len(val_other_sdr))
             val_vocals_sdrs.append(sum(val_vocals_sdr) / len(val_vocals_sdr))
+            val_audience_sdrs.append(sum(val_audience_sdr) / len(val_audience_sdr))
             
 
             if val_nsdrs[-1] > best_nsdr:
@@ -370,6 +486,7 @@ def main():
                     'val_bass_sdrs': val_bass_sdrs,
                     'val_other_sdrs': val_other_sdrs,
                     'val_vocals_sdrs': val_vocals_sdrs,
+                    'val_audience_sdrs': val_audience_sdrs,
                     'total_params': total_params,
                     'epoch_times': epoch_times,
                     'config': cdict

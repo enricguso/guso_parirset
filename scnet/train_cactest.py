@@ -233,6 +233,7 @@ def main():
         val_losses = d['val_losses']
         val_nsdrs = d['val_nsdrs']
         val_drums_sdrs = d['val_drums_sdrs']
+        val_audience_sdrs = d['val_audience_sdrs']
         val_bass_sdrs = d['val_bass_sdrs']
         val_other_sdrs = d['val_other_sdrs']
         val_vocals_sdrs = d['val_vocals_sdrs']
@@ -257,7 +258,8 @@ def main():
         val_drums_sdrs = []
         val_bass_sdrs = []
         val_other_sdrs = []
-        val_vocals_sdrs = []    
+        val_vocals_sdrs = []  
+        val_audience_sdrs = []  
 
 
     for epoch in range(oepoch, config.epochs):
@@ -270,6 +272,7 @@ def main():
         val_bass_sdr = []
         val_other_sdr = []
         val_vocals_sdr = []
+        val_audience_sdr = []
 
         # Adjust LR
         for param_group in optimizer.param_groups:
@@ -286,17 +289,17 @@ def main():
         memthld = config.batch_size * (config.data.segment - 1) * config.data.samplerate
 
         # For every batch:
-
+        
         for sources, rirs in tqdm.tqdm(zip(loaders['train'], itertools.cycle(loaders['rir_train']))):
             if torch.cuda.is_available():
                 sources = sources.cuda()
-                rirs = rirs.cuda()
+                #rirs = rirs.cuda()
             # only during training, augment DRR in RIRs (randomly reduce reverberation):
             drrs_factors = torch.rand(rirs.shape[0])
-            rirs = augment_drr(rirs, drrs_factors)
+            #rirs = augment_drr(rirs, drrs_factors)
 
             sources = augmentx(sources)
-            sources = conv_torch(sources, rirs)
+            #sources = conv_torch(sources, rirs)
             mix = sources.sum(dim=1)
 
             estimate = model(mix)
@@ -318,7 +321,7 @@ def main():
 
         train_losses.append(sum(train_loss) / len(train_loss))
         model.eval()
-
+        
         with torch.no_grad():
             # For every utterance:
             for sources, rirs in tqdm.tqdm(zip(loaders['valid'], itertools.cycle(loaders['rir_valid']))):
@@ -326,12 +329,14 @@ def main():
                     sources = sources[:, :, :, :memthld]
                 if torch.cuda.is_available():
                     sources = sources.cuda()
-                    rirs = rirs.cuda()
+                    #rirs = rirs.cuda()
                 # only during val, scale DRRs in RIRs always in the same way:
-                rirs = augment_drr(rirs, torch.linspace(0,1, rirs.shape[0]))
-                sources = conv_torch(sources, rirs)
-                mix = sources[:, 0]
+                #rirs = augment_drr(rirs, torch.linspace(0,1, rirs.shape[0]))
+                #ch(sources, rirs)
+                
+                #mix = sources[:, 0] #we change this, now the mixture is not the one from musdb18 or moisesdb
                 sources = sources[:, 1:]
+                mix = sources.sum(dim=1)
                 estimate = model(mix) 
                 loss = spec_rmse_loss(estimate, sources, stft_config)
                 
@@ -343,6 +348,7 @@ def main():
                 val_bass_sdr.append(nsdrs[1].item())
                 val_other_sdr.append(nsdrs[2].item())
                 val_vocals_sdr.append(nsdrs[3].item())
+                val_audience_sdr.append(nsdrs[4].item())
                 val_nsdr.append(nsdrs.mean().item())
             val_losses.append(sum(val_loss) / len(val_loss))
             val_nsdrs.append(sum(val_nsdr) / len(val_nsdr))
@@ -350,6 +356,7 @@ def main():
             val_bass_sdrs.append(sum(val_bass_sdr) / len(val_bass_sdr))
             val_other_sdrs.append(sum(val_other_sdr) / len(val_other_sdr))
             val_vocals_sdrs.append(sum(val_vocals_sdr) / len(val_vocals_sdr))
+            val_audience_sdrs.append(sum(val_audience_sdr) / len(val_audience_sdr))
             
 
             if val_nsdrs[-1] > best_nsdr:
@@ -370,6 +377,7 @@ def main():
                     'val_bass_sdrs': val_bass_sdrs,
                     'val_other_sdrs': val_other_sdrs,
                     'val_vocals_sdrs': val_vocals_sdrs,
+                    'val_audience_sdrs': val_audience_sdrs,
                     'total_params': total_params,
                     'epoch_times': epoch_times,
                     'config': cdict
