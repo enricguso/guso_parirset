@@ -180,15 +180,18 @@ def conv_torch(srcs, rirs):
     for i in range(batch_size):
         out_src = []
         for k in range(nsources):
-            left = torchaudio.functional.fftconvolve(
-                    srcs[i, k, 0, :],
-                    rirs[i, 0, :], 'same')
-            right = torchaudio.functional.fftconvolve(
-                srcs[i, k, 1, :],
-                rirs[i, 1, :], 'same')
-            mix = torch.stack([left, right])
-            mix *= torch.sqrt(power(srcs[i, k, :, :]) / power(mix)) #keep power the same as input audio    
-            out_src.append(mix)
+            if torch.sum(srcs[i,k]) != 0:
+                left = torchaudio.functional.fftconvolve(
+                        srcs[i, k, 0, :],
+                        rirs[i, 0, :], 'same')
+                right = torchaudio.functional.fftconvolve(
+                    srcs[i, k, 1, :],
+                    rirs[i, 1, :], 'same')
+                mix = torch.stack([left, right])
+                mix *= torch.sqrt(power(srcs[i, k, :, :]) / power(mix)) #keep power the same as input audio    
+                out_src.append(mix)
+            else:
+                out_src.append(srcs[i, k]) #if the source is silent, keep it silent after convolution (instead of adding noise from RIR tail)
         out_src = torch.stack(out_src)
         out.append(out_src)
     out = torch.stack(out)
