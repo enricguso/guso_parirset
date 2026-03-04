@@ -240,7 +240,6 @@ def main():
     torch.manual_seed(config.seed)
     model, total_params = get_model(config)
   
-    # torch also initialize cuda seed if available
     if torch.cuda.is_available():
         model.cuda()
 
@@ -267,7 +266,7 @@ def main():
     rirset_train = ParirSetRIRS(config.data.rirs, args.rir_mode, set='train')
     rirset_valid = ParirSetRIRS(config.data.rirs, args.rir_mode, set='valid')
     rirloader_train = DataLoader(rirset_train, batch_size=config.batch_size, shuffle=True, drop_last=True)
-    rirloader_valid = DataLoader(rirset_valid, batch_size=config.batch_size, shuffle=False, drop_last=True)
+    rirloader_valid = DataLoader(rirset_valid, batch_size=1, shuffle=False, drop_last=True)
 
     crowdioset_train_amb = CrowdiosetAmb('/media/diskA/enric/crowdioset/', config.data.segment*config.data.samplerate, config.data.samplerate)
     crowdloader_amb_train = DataLoader(crowdioset_train_amb, batch_size=config.batch_size, shuffle=True, drop_last=True)
@@ -441,10 +440,8 @@ def main():
                     sources = sources.cuda()
                     rirs = rirs.cuda()
 
-                # only during val, scale DRRs in RIRs always in the same way:
-                rirs = augment_drr(rirs, torch.linspace(0,1, rirs.shape[0]))
+                rirs = augment_drr(rirs, [0.5]) #we reduce reverberation, accounting for audience absorption
 
-                #mix = sources[:, 0] #we change this, now the mixture is not the one from musdb18 or moisesdb
                 sources = sources[:, 1:]
                 if config.data.reverberate:
                     sources = conv_torch(sources, rirs)
